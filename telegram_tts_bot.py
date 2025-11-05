@@ -9,12 +9,12 @@ from datasets import load_dataset
 # 1. إعدادات البوت والنموذج
 # -------------------------------------------------------------
 
-# الحصول على التوكن من متغيرات البيئة (TELEGRAM_BOT_TOKEN)
-BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') 
+# التوكن المضمَّن مباشرة في الكود بناءً على طلبك ومسؤوليتك
+BOT_TOKEN = '6807502954:AAH5tOwXCjRXtF65wQFEDSkYeFBYIgUjblg' 
 
+# التحقق الأساسي من وجود التوكن
 if not BOT_TOKEN:
-    print("❌ خطأ فادح: متغير البيئة TELEGRAM_BOT_TOKEN غير مضبوط.")
-    # الخروج من البرنامج إذا لم يتم العثور على التوكن
+    print("❌ خطأ فادح: التوكن غير موجود.")
     exit(1)
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -36,7 +36,7 @@ try:
     speaker_embeddings = torch.tensor(embeddings_dataset[5105]["xvector"]).unsqueeze(0)
     print("✅ تم تحميل الخطوط الصوتية بنجاح.")
 except Exception as e:
-    print(f"❌ فشل تحميل الخطوط الصوتية: {e}")
+    print(f"❌ فشل تحميل الخطوط الصوتية. يرجى التأكد من اتصال الإنترنت: {e}")
     speaker_embeddings = None
 
 # إعداد الـ Pipeline (هذا السطر سيقوم بتنزيل ملفات النموذج للمرة الأولى)
@@ -47,7 +47,7 @@ try:
     )
     print(f"✅ تم تحميل نموذج TTS بنجاح: '{MODEL_NAME}'.")
 except Exception as e:
-    print(f"❌ فشل تحميل نموذج TTS: {e}")
+    print(f"❌ فشل تحميل نموذج TTS. يرجى التأكد من تثبيت جميع المكتبات: {e}")
     synthesiser = None
 
 # -------------------------------------------------------------
@@ -59,6 +59,7 @@ def text_to_audio(text_input, output_filename="output.ogg"):
     تحول النص العربي إلى ملف صوتي باستخدام نموذج SpeechT5.
     """
     if not synthesiser or speaker_embeddings is None:
+        # إذا لم يتم تحميل النموذج أو Embeddings، نعود بفشل
         return None 
 
     print(f"-> توليد الصوت للنص: '{text_input[:30]}...'")
@@ -106,7 +107,7 @@ def handle_text_message(message):
             os.remove(audio_file_path)
             
         else:
-            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت.", status_message.chat.id, status_message.message_id)
+            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت. يرجى التأكد من تحميل النموذج.", status_message.chat.id, status_message.message_id)
 
     except Exception as e:
         print(f"❌ حدث خطأ أثناء المعالجة: {e}")
