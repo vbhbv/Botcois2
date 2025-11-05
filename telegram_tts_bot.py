@@ -2,6 +2,7 @@ import torch
 import os
 import telebot
 import soundfile as sf
+import requests # مكتبة مطلوبة للتنزيل
 from transformers import pipeline, SpeechT5Processor, SpeechT5ForTextToSpeech
 from datasets import load_dataset 
 
@@ -18,31 +19,85 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# اسم مستودع النموذج العربي لتحويل النص إلى كلام
-MODEL_NAME = "MBZUAI/speecht5_tts_claritts_ar"
+# اسم مجلد النموذج المحلي (يجب أن يحتوي على الملفات الصغيرة)
+MODEL_NAME = "./tts_model" 
+
+# معرف الملف من رابط Google Drive
+FILE_ID = "13Nq3fJslPv5gFgYxVV8bWE2mhbPor_yG"
+
+# رابط التنزيل المباشر لملفات Google Drive الكبيرة
+DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
 
 # -------------------------------------------------------------
-# 2. تحميل الخطوط الصوتية (Speaker Embeddings) والنموذج
+# 2. وظيفة التنزيل التلقائي لملف pytorch_model.bin
 # -------------------------------------------------------------
+
+# مكان حفظ ملف الأوزان
+WEIGHTS_PATH = os.path.join(MODEL_NAME, "pytorch_model.bin")
+
+
+def download_large_file_from_drive(url, target_path):
+    """
+    يقوم بتنزيل الملف الكبير من Google Drive إذا لم يكن موجوداً.
+    """
+    if os.path.exists(target_path):
+        print(f"✅ الملف موجود بالفعل في: {target_path}")
+        return
+
+    print(f"⏳ تنزيل الملف الكبير (578MB) من Google Drive. قد يستغرق هذا وقتاً...")
+    
+    # التأكد من وجود مجلد tts_model قبل بدء التنزيل
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    
+    # تنزيل الملف مع متابعة إعادة التوجيه
+    try:
+        session = requests.Session()
+        response = session.get(url, stream=True)
+        token = get_confirm_token(response) # وظيفة مساعدة للتعامل مع رسائل التحذير من جوجل درايف
+
+        if token:
+            params = {'id': FILE_ID, 'export': 'download', 'confirm': token}
+            response = session.get(url, params=params, stream=True)
+
+        response.raise_for_status() # التأكد من نجاح الطلب
+        
+        with open(target_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=32768): # 32kb chunks
+                f.write(chunk)
+        print("✅ اكتمل التنزيل بنجاح.")
+    except Exception as e:
+        print(f"❌ فشل التنزيل من الرابط: {e}")
+
+# وظيفة مساعدة للحصول على توكن تأكيد التحميل من جوجل درايف للملفات الكبيرة
+def get_confirm_token(response):
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            return value
+    return None
+
+# -------------------------------------------------------------
+# 3. تحميل النموذج والخطوط الصوتية
+# -------------------------------------------------------------
+
+# يتم تشغيل التنزيل قبل محاولة تحميل النموذج
+download_large_file_from_drive(DOWNLOAD_URL, WEIGHTS_PATH)
 
 print("⏳ جارٍ تهيئة النموذج والخطوط الصوتية...")
 
 # تحميل الـ embeddings لخط متحدث افتراضي.
 try:
-    # هذا السطر سيقوم بتنزيل مجموعة البيانات المطلوبة للمرة الأولى
     embeddings_dataset = load_dataset("microsoft/speecht5_tts", split="train")
-    # نستخدم الخط الصوتي لرقم 5105 كمثال لنبرة الصوت
     speaker_embeddings = torch.tensor(embeddings_dataset[5105]["xvector"]).unsqueeze(0)
     print("✅ تم تحميل الخطوط الصوتية بنجاح.")
 except Exception as e:
-    print(f"❌ فشل تحميل الخطوط الصوتية. يرجى التأكد من اتصال الإنترنت: {e}")
+    print(f"❌ فشل تحميل الخطوط الصوتية: {e}")
     speaker_embeddings = None
 
-# إعداد الـ Pipeline باستخدام المكونات الفردية لضمان التحميل الصحيح
+# إعداد الـ Pipeline من المجلد المحلي
 try:
-    # 1. تحميل المعالج (Processor)
+    # 1. تحميل المعالج (Processor) من المجلد المحلي
     processor = SpeechT5Processor.from_pretrained(MODEL_NAME)
-    # 2. تحميل الموديل (Model Weights)
+    # 2. تحميل الموديل (Model Weights) من المجلد المحلي
     model = SpeechT5ForTextToSpeech.from_pretrained(MODEL_NAME)
     
     # 3. تجميع المكونات في Pipeline للاستخدام السهل
@@ -54,11 +109,12 @@ try:
     )
     print(f"✅ تم تحميل نموذج TTS بنجاح: '{MODEL_NAME}'.")
 except Exception as e:
-    print(f"❌ فشل تحميل نموذج TTS: {e}")
+    print(f"❌ فشل تحميل نموذج TTS من المسار المحلي. يرجى التأكد من اكتمال الملفات: {e}")
     synthesiser = None
 
+
 # -------------------------------------------------------------
-# 3. دالة توليد الصوت
+# 4. دالة توليد الصوت (لم تتغير)
 # -------------------------------------------------------------
 
 def text_to_audio(text_input, output_filename="output.ogg"):
@@ -82,7 +138,7 @@ def text_to_audio(text_input, output_filename="output.ogg"):
     return output_filename
 
 # -------------------------------------------------------------
-# 4. وظائف بوت تليجرام
+# 5. وظائف بوت تليجرام وتشغيله (لم تتغير)
 # -------------------------------------------------------------
 
 @bot.message_handler(commands=['start', 'help'])
@@ -113,7 +169,7 @@ def handle_text_message(message):
             os.remove(audio_file_path)
             
         else:
-            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت. يرجى التأكد من تحميل النموذج.", status_message.chat.id, status_message.message_id)
+            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت. تأكد من تحميل الملفات.", status_message.chat.id, status_message.message_id)
 
     except Exception as e:
         print(f"❌ حدث خطأ أثناء المعالجة: {e}")
@@ -124,10 +180,6 @@ def handle_text_message(message):
         bot.delete_message(status_message.chat.id, status_message.message_id)
     except Exception:
         pass 
-
-# -------------------------------------------------------------
-# 5. تشغيل البوت
-# -------------------------------------------------------------
 
 print("🚀 بدء تشغيل البوت...")
 try:
