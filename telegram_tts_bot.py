@@ -1,47 +1,53 @@
 import torch
-from transformers import pipeline
-import soundfile as sf
 import os
 import telebot
-from datasets import load_dataset # نحتاجها لتحميل Speaker Embeddings الافتراضية
+import soundfile as sf
+from transformers import pipeline
+from datasets import load_dataset 
 
 # -------------------------------------------------------------
 # 1. إعدادات البوت والنموذج
 # -------------------------------------------------------------
 
-# *** يجب عليك استبدال هذا التوكن بتوكن البوت الخاص بك من BotFather ***
-BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN' 
+# الحصول على التوكن من متغيرات البيئة (TELEGRAM_BOT_TOKEN)
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') 
+
+if not BOT_TOKEN:
+    print("❌ خطأ فادح: متغير البيئة TELEGRAM_BOT_TOKEN غير مضبوط.")
+    # الخروج من البرنامج إذا لم يتم العثور على التوكن
+    exit(1)
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# اسم المستودع الصحيح الذي سيتم تنزيله تلقائيًا
+# اسم مستودع النموذج العربي لتحويل النص إلى كلام
 MODEL_NAME = "MBZUAI/speecht5_tts_claritts_ar"
 
 # -------------------------------------------------------------
 # 2. تحميل الخطوط الصوتية (Speaker Embeddings) والنموذج
 # -------------------------------------------------------------
 
-print("Initializing Model and Speaker Embeddings...")
+print("⏳ جارٍ تهيئة النموذج والخطوط الصوتية...")
 
-# تحميل الـ embeddings لخط متحدث افتراضي (هذا الإجراء يتم مرة واحدة)
-# يمكنك تغيير الرقم (5105) للحصول على نبرة صوت مختلفة قليلاً
+# تحميل الـ embeddings لخط متحدث افتراضي.
 try:
+    # هذا السطر سيقوم بتنزيل مجموعة البيانات المطلوبة للمرة الأولى
     embeddings_dataset = load_dataset("microsoft/speecht5_tts", split="train")
-    # نستخدم الخط الصوتي لرقم 5105 كمثال
+    # نستخدم الخط الصوتي لرقم 5105 كمثال لنبرة الصوت
     speaker_embeddings = torch.tensor(embeddings_dataset[5105]["xvector"]).unsqueeze(0)
-    print("Speaker Embeddings loaded successfully.")
+    print("✅ تم تحميل الخطوط الصوتية بنجاح.")
 except Exception as e:
-    print(f"Error loading Speaker Embeddings dataset: {e}")
-    speaker_embeddings = None # إذا فشل التحميل، يجب التعامل مع هذا لاحقاً
+    print(f"❌ فشل تحميل الخطوط الصوتية: {e}")
+    speaker_embeddings = None
 
-# إعداد الـ Pipeline لنموذج تحويل النص إلى كلام العربي
+# إعداد الـ Pipeline (هذا السطر سيقوم بتنزيل ملفات النموذج للمرة الأولى)
 try:
     synthesiser = pipeline(
         "text-to-speech", 
         MODEL_NAME
     )
-    print(f"TTS Model '{MODEL_NAME}' loaded successfully.")
+    print(f"✅ تم تحميل نموذج TTS بنجاح: '{MODEL_NAME}'.")
 except Exception as e:
-    print(f"Error loading TTS Model: {e}")
+    print(f"❌ فشل تحميل نموذج TTS: {e}")
     synthesiser = None
 
 # -------------------------------------------------------------
@@ -53,9 +59,9 @@ def text_to_audio(text_input, output_filename="output.ogg"):
     تحول النص العربي إلى ملف صوتي باستخدام نموذج SpeechT5.
     """
     if not synthesiser or speaker_embeddings is None:
-        return None # لا يمكن توليد الصوت بدون النموذج أو Embeddings
+        return None 
 
-    print(f"Generating audio for: '{text_input}'")
+    print(f"-> توليد الصوت للنص: '{text_input[:30]}...'")
     
     # تشغيل عملية التوليد
     speech = synthesiser(
@@ -63,7 +69,7 @@ def text_to_audio(text_input, output_filename="output.ogg"):
         forward_params={"speaker_embeddings": speaker_embeddings}
     )
 
-    # حفظ ملف الصوت بصيغة OGG (صيغة مفضلة لبوتات تليجرام)
+    # حفظ ملف الصوت بصيغة OGG (موصى بها لتليجرام)
     sf.write(output_filename, speech["audio"], samplerate=speech["sampling_rate"])
     
     return output_filename
@@ -74,18 +80,18 @@ def text_to_audio(text_input, output_filename="output.ogg"):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "مرحباً بك! أنا بوت لتحويل النص العربي إلى كلام. أرسل لي أي نص وسأقوم بتحويله إلى مقطع صوتي.")
+    bot.reply_to(message, "👋 مرحباً! أرسل لي أي نص عربي وسأقوم بتحويله إلى مقطع صوتي باستخدام نموذج AI.")
 
 @bot.message_handler(content_types=['text'])
 def handle_text_message(message):
     user_text = message.text
     
-    if len(user_text) > 500: # حد أقصى للنص لتجنب المعالجة الطويلة جداً
-        bot.reply_to(message, "عذراً، يرجى إرسال نص أقل من 500 حرف.")
+    if len(user_text) > 500: 
+        bot.reply_to(message, "⚠️ عذراً، يرجى إرسال نص أقل من 500 حرف لتجنب المعالجة الطويلة.")
         return
 
-    # إرسال رسالة "جارٍ المعالجة..." لتجنب انتظار المستخدم
-    status_message = bot.reply_to(message, "⏳ جارٍ معالجة النص وتحويله إلى كلام، يرجى الانتظار...")
+    # إرسال رسالة حالة (قيد المعالجة)
+    status_message = bot.reply_to(message, "⏳ جارٍ معالجة النص...")
 
     try:
         # توليد ملف الصوت
@@ -93,36 +99,31 @@ def handle_text_message(message):
         audio_file_path = text_to_audio(user_text, output_file_name)
         
         if audio_file_path:
-            # إرسال الملف الصوتي
+            # إرسال الملف الصوتي ثم حذفه
             with open(audio_file_path, 'rb') as audio_file:
-                # نستخدم send_voice لأنها تتناسب مع ملفات OGG/Opus
-                bot.send_voice(message.chat.id, audio_file, caption=f"تم توليد الصوت بنجاح.")
+                bot.send_voice(message.chat.id, audio_file)
             
-            # تنظيف الملف
             os.remove(audio_file_path)
             
         else:
-            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت (قد تكون ملفات النموذج لم تكتمل).", 
-                                  status_message.chat.id, status_message.message_id)
+            bot.edit_message_text("❌ عذراً، لم يتمكن البوت من توليد الصوت.", status_message.chat.id, status_message.message_id)
 
     except Exception as e:
-        print(f"An error occurred: {e}")
-        bot.edit_message_text("❌ عذراً، حدث خطأ أثناء معالجة طلبك.", 
-                              status_message.chat.id, status_message.message_id)
+        print(f"❌ حدث خطأ أثناء المعالجة: {e}")
+        bot.edit_message_text("❌ حدث خطأ غير متوقع أثناء معالجة طلبك.", status_message.chat.id, status_message.message_id)
 
-    # حذف رسالة الحالة بعد الانتهاء
+    # حذف رسالة الحالة
     try:
         bot.delete_message(status_message.chat.id, status_message.message_id)
     except Exception:
-        pass # قد لا يمكن حذفه إذا كان قد تم تعديله بالفعل
+        pass 
 
 # -------------------------------------------------------------
 # 5. تشغيل البوت
 # -------------------------------------------------------------
 
-print("Starting bot polling...")
+print("🚀 بدء تشغيل البوت...")
 try:
-    # لتشغيل البوت بشكل مستمر
     bot.infinity_polling()
 except Exception as e:
-    print(f"Bot failed to start: {e}")
+    print(f"❌ فشل تشغيل البوت: {e}")
