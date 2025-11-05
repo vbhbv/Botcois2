@@ -2,17 +2,16 @@ import torch
 import os
 import telebot
 import soundfile as sf
-from transformers import pipeline
+from transformers import pipeline, SpeechT5Processor, SpeechT5ForTextToSpeech
 from datasets import load_dataset 
 
 # -------------------------------------------------------------
 # 1. إعدادات البوت والنموذج
 # -------------------------------------------------------------
 
-# التوكن المضمَّن مباشرة في الكود بناءً على طلبك ومسؤوليتك
+# التوكن المضمَّن مباشرة (بناءً على طلبك ومسؤوليتك)
 BOT_TOKEN = '6807502954:AAH5tOwXCjRXtF65wQFEDSkYeFBYIgUjblg' 
 
-# التحقق الأساسي من وجود التوكن
 if not BOT_TOKEN:
     print("❌ خطأ فادح: التوكن غير موجود.")
     exit(1)
@@ -39,15 +38,23 @@ except Exception as e:
     print(f"❌ فشل تحميل الخطوط الصوتية. يرجى التأكد من اتصال الإنترنت: {e}")
     speaker_embeddings = None
 
-# إعداد الـ Pipeline (هذا السطر سيقوم بتنزيل ملفات النموذج للمرة الأولى)
+# إعداد الـ Pipeline باستخدام المكونات الفردية لضمان التحميل الصحيح
 try:
+    # 1. تحميل المعالج (Processor)
+    processor = SpeechT5Processor.from_pretrained(MODEL_NAME)
+    # 2. تحميل الموديل (Model Weights)
+    model = SpeechT5ForTextToSpeech.from_pretrained(MODEL_NAME)
+    
+    # 3. تجميع المكونات في Pipeline للاستخدام السهل
     synthesiser = pipeline(
-        "text-to-speech", 
-        MODEL_NAME
+        "text-to-speech",
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor
     )
     print(f"✅ تم تحميل نموذج TTS بنجاح: '{MODEL_NAME}'.")
 except Exception as e:
-    print(f"❌ فشل تحميل نموذج TTS. يرجى التأكد من تثبيت جميع المكتبات: {e}")
+    print(f"❌ فشل تحميل نموذج TTS: {e}")
     synthesiser = None
 
 # -------------------------------------------------------------
@@ -59,7 +66,6 @@ def text_to_audio(text_input, output_filename="output.ogg"):
     تحول النص العربي إلى ملف صوتي باستخدام نموذج SpeechT5.
     """
     if not synthesiser or speaker_embeddings is None:
-        # إذا لم يتم تحميل النموذج أو Embeddings، نعود بفشل
         return None 
 
     print(f"-> توليد الصوت للنص: '{text_input[:30]}...'")
