@@ -1,7 +1,6 @@
 torch
 transformers
-datasets
 soundfile
 pytelegrambotapi
 requests
-sentencepiece 
+huggingface-hub 
