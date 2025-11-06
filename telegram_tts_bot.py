@@ -3,14 +3,15 @@ import os
 import telebot
 import soundfile as sf
 import requests 
-from transformers import pipeline, SpeechT5Processor, SpeechT5ForTextToSpeech
-# لم نعد نستخدم 'datasets' لذلك تم حذفها
+# تم تغيير الاستيراد لاستخدام فئات Auto لتجنب تناقض SpeechT5/Vits
+from transformers import pipeline, AutoProcessor, AutoModelForTextToSpeech 
+# تم حذف 'datasets'
 
 # -------------------------------------------------------------
 # 1. إعدادات البوت والنموذج
 # -------------------------------------------------------------
 
-# التوكن المضمَّن مباشرة
+# التوكن المضمَّن مباشرة (لتجاوز مشاكل Railway)
 BOT_TOKEN = '6807502954:AAH5tOwXCjRXtF65wQFEDSkYeFBYIgUjblg' 
 
 if not BOT_TOKEN:
@@ -48,7 +49,7 @@ def download_large_file_from_drive(url, target_path):
         print(f"✅ ملف pytorch_model.bin موجود بالفعل.")
         return
 
-    print(f"⏳ تنزيل الملف الكبير (578MB) من Google Drive. قد يستغرق هذا وقتاً...")
+    print(f"⏳ تنزيل الملف الكبير (578MB) من Google Drive...")
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     
     try:
@@ -70,7 +71,7 @@ def download_large_file_from_drive(url, target_path):
         print(f"❌ فشل التنزيل من الرابط: {e}")
 
 # -------------------------------------------------------------
-# 3. تحميل النموذج والخطوط الصوتية (تم حذف الخط الصوتي لتجاوز المشاكل)
+# 3. تحميل النموذج والخطوط الصوتية
 # -------------------------------------------------------------
 
 # تشغيل التنزيل قبل محاولة تحميل النموذج
@@ -78,17 +79,15 @@ download_large_file_from_drive(DOWNLOAD_URL, WEIGHTS_PATH)
 
 print("⏳ جارٍ تهيئة النموذج...")
 
-# بما أننا لا نستطيع تحميل ملف الخط الصوتي، سنقوم بتعيينه None
-# وسيعتمد النموذج على خط صوتي داخلي أو افتراضي
+# تم تعيين الخط الصوتي None لتجنب مشكلة الاتصال الخارجي والملف المفقود
 speaker_embeddings = None
 
 try:
-    # 1. تحميل المعالج (Processor) من المجلد المحلي
-    processor = SpeechT5Processor.from_pretrained(MODEL_NAME)
-    # 2. تحميل الموديل (Model Weights) من المجلد المحلي
-    model = SpeechT5ForTextToSpeech.from_pretrained(MODEL_NAME)
+    # استخدام AutoProcessor و AutoModelForTextToSpeech لحل مشكلة التناقض
+    processor = AutoProcessor.from_pretrained(MODEL_NAME)
+    model = AutoModelForTextToSpeech.from_pretrained(MODEL_NAME)
     
-    # 3. تجميع المكونات في Pipeline للاستخدام السهل
+    # تجميع المكونات في Pipeline للاستخدام السهل
     synthesiser = pipeline(
         "text-to-speech",
         model=model,
@@ -97,7 +96,7 @@ try:
     )
     print(f"✅ تم تحميل نموذج TTS بنجاح من المسار المحلي: '{MODEL_NAME}'.")
 except Exception as e:
-    print(f"❌ فشل تحميل النموذج من المسار المحلي. تأكد من وجود الملفات الصغيرة مثل preprocessor_config.json: {e}")
+    print(f"❌ فشل تحميل النموذج من المسار المحلي. تأكد من وجود الملفات الصغيرة مثل config.json و preprocessor_config.json: {e}")
     synthesiser = None
 
 # -------------------------------------------------------------
@@ -106,24 +105,18 @@ except Exception as e:
 
 def text_to_audio(text_input, output_filename="output.ogg"):
     """
-    تحول النص العربي إلى ملف صوتي باستخدام نموذج SpeechT5.
+    تحول النص العربي إلى ملف صوتي باستخدام نموذج Vits.
     """
     if not synthesiser: 
         return None 
 
     print(f"-> توليد الصوت للنص: '{text_input[:30]}...'")
     
-    # تشغيل عملية التوليد. (تمرير الخط الصوتي فقط إذا كان موجوداً)
-    if speaker_embeddings is not None:
-        speech = synthesiser(
-            text_input,
-            forward_params={"speaker_embeddings": speaker_embeddings}
-        )
-    else:
-        # التشغيل بدون خط صوتي محدد
-        speech = synthesiser(text_input)
+    # التشغيل بدون تمرير الخط الصوتي
+    speech = synthesiser(text_input)
 
     # حفظ ملف الصوت
+    # يجب استخدام مفتاح 'audio' و 'sampling_rate' بغض النظر عن نوع النموذج (Vits/SpeechT5)
     sf.write(output_filename, speech["audio"], samplerate=speech["sampling_rate"])
     
     return output_filename
