@@ -3,15 +3,16 @@ import os
 import telebot
 import soundfile as sf
 import requests 
-# تم تغيير الاستيراد لاستخدام فئات Auto لتجنب تناقض SpeechT5/Vits
-from transformers import pipeline, AutoProcessor, AutoModelForTextToSpeech 
-# تم حذف 'datasets'
+from transformers import pipeline, SpeechT5Processor, SpeechT5ForTextToSpeech, AutoModelForTextToSpeech
+# نحتاج إلى مكتبة huggingface_hub إذا أردنا التنزيل التلقائي لملفات الإعدادات
+from huggingface_hub import snapshot_download 
+# لم نعد نستخدم 'datasets'
 
 # -------------------------------------------------------------
 # 1. إعدادات البوت والنموذج
 # -------------------------------------------------------------
 
-# التوكن المضمَّن مباشرة (لتجاوز مشاكل Railway)
+# التوكن المضمَّن مباشرة
 BOT_TOKEN = '6807502954:AAH5tOwXCjRXtF65wQFEDSkYeFBYIgUjblg' 
 
 if not BOT_TOKEN:
@@ -20,109 +21,92 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# اسم مجلد النموذج المحلي (يجب أن يحتوي على جميع الملفات الصغيرة)
-MODEL_NAME = "./tts_model" 
+# **النموذج الأخف والمتاح على Hugging Face**
+MODEL_NAME = "speecht5_tts_ar" 
 
-# معرف ملف pytorch_model.bin من Google Drive 
-FILE_ID = "13Nq3fJslPv5gFgYxVV8bWE2mhbPor_yG"
+# المسار المحلي الذي سننزل إليه الملفات (إذا كنا بحاجة إلى التخزين المؤقت)
+MODEL_CACHE_DIR = "./tts_ar_model"
+# ملف الخط الصوتي (Embeddings) - سنستخدم خطأ عشوائياً بدلاً من التنزيل
+SPEAKER_EMBEDDINGS = torch.rand(1, 512) 
 
-# رابط التنزيل المباشر
-DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
 
 # -------------------------------------------------------------
-# 2. وظيفة التنزيل التلقائي لملف pytorch_model.bin
+# 2. وظيفة التنزيل التلقائي (لضمان وجود الملفات الصغيرة)
 # -------------------------------------------------------------
 
-WEIGHTS_PATH = os.path.join(MODEL_NAME, "pytorch_model.bin")
-
-def get_confirm_token(response):
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            return value
-    return None
-
-def download_large_file_from_drive(url, target_path):
+def initialize_model_files():
     """
-    يقوم بتنزيل الملف الكبير من Google Drive إذا لم يكن موجوداً.
+    يقوم بمحاولة تنزيل الملفات الصغيرة من Hugging Face لتجنب أخطاء الاتصال.
     """
-    if os.path.exists(target_path):
-        print(f"✅ ملف pytorch_model.bin موجود بالفعل.")
+    if os.path.isdir(MODEL_CACHE_DIR) and os.path.exists(os.path.join(MODEL_CACHE_DIR, "config.json")):
+        print("✅ مجلد النموذج المحلي موجود.")
         return
 
-    print(f"⏳ تنزيل الملف الكبير (578MB) من Google Drive...")
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    
+    print("⏳ جارٍ محاولة تنزيل ملفات التهيئة الصغيرة من Hugging Face...")
     try:
-        session = requests.Session()
-        response = session.get(url, stream=True)
-        token = get_confirm_token(response)
-
-        if token:
-            params = {'id': FILE_ID, 'export': 'download', 'confirm': token}
-            response = session.get(url, params=params, stream=True)
-
-        response.raise_for_status()
-        
-        with open(target_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=32768): 
-                f.write(chunk)
-        print("✅ اكتمل التنزيل بنجاح.")
+        # نقوم بتنزيل Snapshot لجميع الملفات باستثناء الملفات الكبيرة (مثل pytorch_model.bin)
+        snapshot_download(
+            repo_id=MODEL_NAME, 
+            local_dir=MODEL_CACHE_DIR,
+            ignore_patterns=["*.bin", "*.safetensors"] 
+        )
+        print("✅ اكتمل تنزيل ملفات التهيئة الصغيرة بنجاح.")
     except Exception as e:
-        print(f"❌ فشل التنزيل من الرابط: {e}")
+        print(f"❌ فشل تنزيل ملفات التهيئة الصغيرة: {e}")
 
 # -------------------------------------------------------------
-# 3. تحميل النموذج والخطوط الصوتية
+# 3. تحميل النموذج
 # -------------------------------------------------------------
 
-# تشغيل التنزيل قبل محاولة تحميل النموذج
-download_large_file_from_drive(DOWNLOAD_URL, WEIGHTS_PATH)
+# تهيئة الملفات الصغيرة أولاً
+initialize_model_files()
 
-print("⏳ جارٍ تهيئة النموذج...")
-
-# تم تعيين الخط الصوتي None لتجنب مشكلة الاتصال الخارجي والملف المفقود
-speaker_embeddings = None
+print("⏳ جارٍ تهيئة النموذج... قد يستغرق تنزيل ملف الأوزان وقتاً.")
+synthesiser = None
 
 try:
-    # استخدام AutoProcessor و AutoModelForTextToSpeech لحل مشكلة التناقض
-    processor = AutoProcessor.from_pretrained(MODEL_NAME)
-    model = AutoModelForTextToSpeech.from_pretrained(MODEL_NAME)
+    # سيقوم هذا التحميل بمحاولة استخدام الملفات المحلية أولاً، ثم التنزيل المباشر للأوزان
+    processor = SpeechT5Processor.from_pretrained(MODEL_CACHE_DIR)
+    model = SpeechT5ForTextToSpeech.from_pretrained(MODEL_CACHE_DIR)
     
-    # تجميع المكونات في Pipeline للاستخدام السهل
+    # تجميع المكونات في Pipeline
     synthesiser = pipeline(
         "text-to-speech",
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor
     )
-    print(f"✅ تم تحميل نموذج TTS بنجاح من المسار المحلي: '{MODEL_NAME}'.")
+    print(f"✅ تم تحميل نموذج TTS بنجاح.")
 except Exception as e:
-    print(f"❌ فشل تحميل النموذج من المسار المحلي. تأكد من وجود الملفات الصغيرة مثل config.json و preprocessor_config.json: {e}")
+    print(f"❌ فشل تحميل النموذج: {e}")
     synthesiser = None
 
 # -------------------------------------------------------------
-# 4. دالة توليد الصوت
+# 4. دالة توليد الصوت (باستخدام الخط الصوتي العشوائي)
 # -------------------------------------------------------------
 
 def text_to_audio(text_input, output_filename="output.ogg"):
     """
-    تحول النص العربي إلى ملف صوتي باستخدام نموذج Vits.
+    تحول النص العربي إلى ملف صوتي باستخدام النموذج.
     """
     if not synthesiser: 
         return None 
 
     print(f"-> توليد الصوت للنص: '{text_input[:30]}...'")
     
-    # التشغيل بدون تمرير الخط الصوتي
-    speech = synthesiser(text_input)
+    # التشغيل مع الخط الصوتي العشوائي
+    speech = synthesiser(
+        text_input,
+        forward_params={"speaker_embeddings": SPEAKER_EMBEDDINGS}
+    )
 
     # حفظ ملف الصوت
-    # يجب استخدام مفتاح 'audio' و 'sampling_rate' بغض النظر عن نوع النموذج (Vits/SpeechT5)
     sf.write(output_filename, speech["audio"], samplerate=speech["sampling_rate"])
     
     return output_filename
 
 # -------------------------------------------------------------
-# 5. وظائف بوت تليجرام وتشغيله
+# 5. وظائف بوت تليجرام وتشغيله (تظل كما هي)
 # -------------------------------------------------------------
 
 @bot.message_handler(commands=['start', 'help'])
