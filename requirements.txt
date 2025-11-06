@@ -3,3 +3,5 @@ transformers
 datasets
 soundfile
 pytelegrambotapi
+requests
+sentencepiece 
